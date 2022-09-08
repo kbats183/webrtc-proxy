@@ -1,0 +1,54 @@
+<html>
+<head>
+    <title>Mpeg TS to WebRTC</title>
+</head>
+
+<body>
+<h1>Mpeg TS to WebRTC</h1>
+<p>
+    <label for="streamUrl">Stream Url</label>
+    <input id="streamUrl" type="text" value="http://localhost:9090"/>
+    <button id="streamOpenBtn">Open</button>
+</p>
+
+<div style="max-width: 100%;">
+    <video id="webrtcVideo" width="100%" style="max-width: 800px;" autoplay controls=""></video>
+</div>
+</body>
+
+<script>
+    let pc = undefined;
+
+    document.getElementById("streamOpenBtn").addEventListener("click", () => playStream());
+
+    function playStream() {
+        pc?.close();
+        pc = new RTCPeerConnection();
+        pc.ontrack = function (event) {
+            if (event.track.kind !== "video") {
+                return;
+            }
+            const webrtcVideo = document.getElementById("webrtcVideo");
+            webrtcVideo.srcObject = event.streams[0];
+        };
+
+        pc.addTransceiver("video");
+        pc.addTransceiver("audio");
+        pc.createOffer()
+            .then(offer => {
+                pc.setLocalDescription(offer)
+                const streamUrl = document.getElementById("streamUrl").value;
+                return fetch(`http://localhost:9080/c?source=${encodeURIComponent(streamUrl)}`, {
+                    method: "post",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify(offer),
+                })
+            })
+            .then(res => res.json())
+            .then(res => pc.setRemoteDescription(res))
+            .catch((e) => console.error("Failed to fetch peer connection info", e));
+    }
+</script>
+</html>
