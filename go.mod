@@ -4,7 +4,10 @@ go 1.18
 
 require github.com/pion/webrtc/v3 v3.1.43
 
-require github.com/yapingcat/gomedia v0.0.0-20220826132733-e6cff422c664
+require (
+	github.com/yapingcat/gomedia v0.0.0-20220826132733-e6cff422c664
+
+)
 
 require (
 	github.com/google/uuid v1.3.0 // indirect
@@ -25,6 +28,7 @@ require (
 	github.com/pion/turn/v2 v2.0.8 // indirect
 	github.com/pion/udp v0.1.1 // indirect
 	golang.org/x/crypto v0.0.0-20220516162934-403b01795ae8 // indirect
-	golang.org/x/net v0.0.0-20220630215102-69896b714898 // indirect
-	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
+	golang.org/x/net v0.0.0-20220722155237-a158d28d115b // indirect
+	golang.org/x/sys v0.0.0-20220909162455-aba9fc2a8ff2 // indirect
+
 )

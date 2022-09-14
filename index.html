@@ -1,18 +1,21 @@
 <html>
 <head>
-    <title>Mpeg TS to WebRTC</title>
+    <title>Mpeg TS / Rtmp to WebRTC</title>
 </head>
 
 <body>
-<h1>Mpeg TS to WebRTC</h1>
+<h1>Mpeg TS / Rtmp to WebRTC</h1>
 <p>
     <label for="streamUrl">Stream Url</label>
-    <input id="streamUrl" type="text" value="http://localhost:9090"/>
+<!--    <input id="streamUrl" type="text" value="http://localhost:9090"/>-->
+    <input id="streamUrl" type="text" value="aboba"/>
     <button id="streamOpenBtn">Open</button>
 </p>
+<p id="connectionUrl"></p>
 
 <div style="max-width: 100%;">
     <video id="webrtcVideo" width="100%" style="max-width: 800px;" autoplay controls=""></video>
+    <audio id="webrtcAudio" autoplay controls=""></audio>
 </div>
 </body>
 
@@ -21,15 +24,21 @@
 
     document.getElementById("streamOpenBtn").addEventListener("click", () => playStream());
 
+    const getConnectionUrl = (streamSource) =>
+        `${location.protocol}//${location.host}/c?source=${encodeURIComponent(streamSource)}`;
+
     function playStream() {
         pc?.close();
         pc = new RTCPeerConnection();
         pc.ontrack = function (event) {
-            if (event.track.kind !== "video") {
-                return;
+            if (event.track.kind === "video") {
+                const webrtcVideo = document.getElementById("webrtcVideo");
+                webrtcVideo.srcObject = event.streams[0];
             }
-            const webrtcVideo = document.getElementById("webrtcVideo");
-            webrtcVideo.srcObject = event.streams[0];
+            if (event.track.kind === "audio") {
+                const webrtcAudio = document.getElementById("webrtcAudio");
+                webrtcAudio.srcObject = event.streams[event.streams.length - 1];
+            }
         };
 
         pc.addTransceiver("video");
@@ -38,7 +47,9 @@
             .then(offer => {
                 pc.setLocalDescription(offer)
                 const streamUrl = document.getElementById("streamUrl").value;
-                return fetch(`http://localhost:9080/c?source=${encodeURIComponent(streamUrl)}`, {
+                document.getElementById("connectionUrl").innerText = getConnectionUrl(streamUrl);
+
+                return fetch(getConnectionUrl(streamUrl), {
                     method: "post",
                     headers: {
                         "Content-Type": "application/json",

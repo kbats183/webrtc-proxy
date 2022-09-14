@@ -5,25 +5,25 @@ import (
 	"fmt"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
-	"github.com/yapingcat/gomedia/go-mpeg2"
+	"github.com/yapingcat/gomedia/go-codec"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
 func main() {
-	http.Handle("/", http.FileServer(http.Dir(".")))
-	http.HandleFunc("/c", handleCreatePeerConnection)
-	panic(http.ListenAndServe(":9080", nil))
+	stopCh := make(chan struct{})
+	go startRtmpServer(stopCh)
+	go startHttpStream(stopCh)
+	<-stopCh
 }
 
-func setupResponse(w *http.ResponseWriter, _ *http.Request) {
-	(*w).Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+type httpServer struct {
+	connections proxyConnections
 }
 
-func handleCreatePeerConnection(w http.ResponseWriter, r *http.Request) {
+func (hs *httpServer) handleCreatePeerConnection(w http.ResponseWriter, r *http.Request) {
 	setupResponse(&w, r)
 	source := r.URL.Query().Get("source")
 
@@ -33,7 +33,7 @@ func handleCreatePeerConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	description := createProxyPeer(source, offer)
+	description := hs.createProxyPeer(source, offer)
 
 	response, err := json.Marshal(description)
 	if err != nil {
@@ -44,7 +44,39 @@ func handleCreatePeerConnection(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func createProxyPeer(source string, offer webrtc.SessionDescription) *webrtc.SessionDescription {
+func startHttpStream(closeCh chan<- struct{}) {
+	log.Println("Starting HTTP Server")
+
+	server := httpServer{
+		connections: proxyConnections{},
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/", http.FileServer(http.Dir(".")))
+	mux.HandleFunc("/c", server.handleCreatePeerConnection)
+	mux.HandleFunc("/status", server.handleConnectionsStatus)
+	err := http.ListenAndServe(":9080", mux)
+	close(closeCh)
+	log.Fatal(err)
+}
+
+func setupResponse(w *http.ResponseWriter, _ *http.Request) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
+	(*w).Header().Set("Access-Control-Allow-Origin", "http://localhost:8080")
+	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+}
+
+func (hs *httpServer) handleConnectionsStatus(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	connectionsStatus := hs.connections.GetStatus()
+	for _, status := range connectionsStatus {
+		_, _ = w.Write([]byte(status))
+		_, _ = w.Write([]byte("\n"))
+	}
+	_, _ = w.Write([]byte("Hello"))
+}
+
+func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescription) *webrtc.SessionDescription {
 	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		panic(err)
@@ -58,7 +90,7 @@ func createProxyPeer(source string, offer webrtc.SessionDescription) *webrtc.Ses
 		panic(err)
 	}
 
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMU}, "audio", "pion")
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA}, "audio", "pion")
 	if err != nil {
 		panic(err)
 	}
@@ -79,42 +111,73 @@ func createProxyPeer(source string, offer webrtc.SessionDescription) *webrtc.Ses
 	}
 	<-gatherComplete
 
-	go startMpegTsProxy(peerConnection, videoTrack, audioTrack, source)
+	if strings.Index(source, "http") == 0 {
+		proxyConnection := hs.connections.NewConnection(peerConnection)
+
+		go startMpegTsProxy(peerConnection, videoTrack, audioTrack, source, proxyConnection)
+	} else if producer := rtmpCenter.find(source); producer != nil {
+		proxyConnection := hs.connections.NewConnection(peerConnection)
+		go startRtmpProxy(peerConnection, videoTrack, audioTrack, producer, proxyConnection)
+	} else {
+		log.Printf("Source %s not found", source)
+	}
 
 	return peerConnection.LocalDescription()
 }
 
-func startMpegTsProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackLocalStaticSample, audioTrack *webrtc.TrackLocalStaticSample, source string) {
-	log.Println("Starting ts proxy to", source)
-	resp, err := http.Get(source)
-	if err != nil {
-		log.Println("Failed to connect to ts stream", source)
-		return
+func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackLocalStaticSample, _ *webrtc.TrackLocalStaticSample, producer *RtmpProducer, proxyConnection *proxyConnection) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println("panic occurred:", err)
+		}
+	}()
+
+	consumer := WebRtcConsumer{
+		clientId:   proxyConnection.key,
+		isReady:    true,
+		videoTrack: videoTrack,
 	}
-	demuxer := mpeg2.NewTSDemuxer()
-	demuxer.OnFrame = func(cid mpeg2.TS_STREAM_TYPE, frame []byte, pts uint64, dts uint64) {
-		if cid == mpeg2.TS_STREAM_H264 {
-			err := videoTrack.WriteSample(media.Sample{
-				Data:     frame,
-				Duration: time.Second / 30,
-			})
-			if err != nil {
-				fmt.Println("Failed to send frame:", err)
+	consumer.init()
+	producer.addConsumer(&consumer)
+
+	log.Printf("Start fetching frame from RTMP\n")
+
+	connection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		proxyConnection.ChangeState(state)
+		if state == webrtc.PeerConnectionStateDisconnected {
+			consumer.isReady = false
+			close(consumer.frameCome)
+			producer.removeConsumer(proxyConnection.key)
+			proxyConnection.Close()
+		}
+	})
+
+	firstFrame := true
+	for {
+		_, running := <-consumer.frameCome
+		if !running {
+			return
+		}
+		consumer.mtx.Lock()
+		frames := consumer.framesList
+		consumer.framesList = nil
+		consumer.mtx.Unlock()
+		for _, frame := range frames {
+			if firstFrame { //wait for I frame
+				if frame.cid == codec.CODECID_VIDEO_H264 {
+					if !codec.IsH264IDRFrame(frame.frame) {
+						continue
+					}
+					firstFrame = false
+				} else {
+					continue
+				}
 			}
-		} else if cid == mpeg2.TS_STREAM_AAC {
-			//fmt.Println("hello")
-			//if !foundAudio {
-			//	foundAudio = true
-			//}
-			//n, err := aacFileFd.Write(frame)
-			//if err != nil || n != len(frame) {
-			//	fmt.Println(err)
-			//}
+			_ = videoTrack.WriteSample(media.Sample{
+				Duration: time.Second,
+				Data:     frame.frame,
+			})
 		}
 	}
-	err = demuxer.Input(resp.Body)
-	if err != nil {
-		fmt.Println("Failed to read:", err)
-		return
-	}
+
 }
