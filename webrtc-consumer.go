@@ -29,7 +29,7 @@ func (wc *WebRtcConsumer) ready() bool {
 
 func (wc *WebRtcConsumer) play(frame *MediaFrame) {
 	if wc.isReady {
-		if frame.cid != codec.CODECID_VIDEO_H264 || !codec.IsH264IDRFrame(frame.frame) {
+		if frame.cid != codec.CODECID_VIDEO_H264 {
 			return
 		}
 		wc.mtx.Lock()

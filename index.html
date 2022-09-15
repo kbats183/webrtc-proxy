@@ -19,24 +19,28 @@
 </div>
 </body>
 
+</html>
 <script>
     let pc = undefined;
 
     document.getElementById("streamOpenBtn").addEventListener("click", () => playStream());
+    const webrtcVideo = document.getElementById("webrtcVideo");
+    const webrtcAudio = document.getElementById("webrtcAudio");
 
     const getConnectionUrl = (streamSource) =>
         `${location.protocol}//${location.host}/c?source=${encodeURIComponent(streamSource)}`;
 
     function playStream() {
         pc?.close();
+        webrtcVideo.srcObject = null;
+        webrtcAudio.srcObject = null;
+
         pc = new RTCPeerConnection();
         pc.ontrack = function (event) {
             if (event.track.kind === "video") {
-                const webrtcVideo = document.getElementById("webrtcVideo");
                 webrtcVideo.srcObject = event.streams[0];
             }
             if (event.track.kind === "audio") {
-                const webrtcAudio = document.getElementById("webrtcAudio");
                 webrtcAudio.srcObject = event.streams[event.streams.length - 1];
             }
         };
@@ -62,4 +66,3 @@
             .catch((e) => console.error("Failed to fetch peer connection info", e));
     }
 </script>
-</html>

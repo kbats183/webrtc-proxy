@@ -3,24 +3,61 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
 	"github.com/yapingcat/gomedia/go-codec"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 )
 
 func main() {
+	//getWebrtcApi := getWebrtcApi()
 	stopCh := make(chan struct{})
 	go startRtmpServer(stopCh)
-	go startHttpStream(stopCh)
+	go startHttpStream(stopCh, nil)
 	<-stopCh
+}
+
+func getWebrtcApi() *webrtc.API {
+	// Listen on UDP Port 8443, will be used for all WebRTC traffic
+	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.IP{0, 0, 0, 0},
+		Port: 8443,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("Listening for WebRTC traffic at %s\n", udpListener.LocalAddr())
+
+	// Create a SettingEngine, this allows non-standard WebRTC behavior
+	settingEngine := webrtc.SettingEngine{}
+
+	// Configure our SettingEngine to use our UDPMux. By default a PeerConnection has
+	// no global state. The API+SettingEngine allows the user to share state between them.
+	// In this case we are sharing our listening port across many.
+	settingEngine.SetICEUDPMux(webrtc.NewICEUDPMux(nil, udpListener))
+
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterDefaultCodecs(); err != nil {
+		panic(err)
+	}
+
+	i := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(m, i); err != nil {
+		panic(err)
+	}
+
+	return webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(i))
 }
 
 type httpServer struct {
 	connections proxyConnections
+	webrtc      *webrtc.API
 }
 
 func (hs *httpServer) handleCreatePeerConnection(w http.ResponseWriter, r *http.Request) {
@@ -44,11 +81,12 @@ func (hs *httpServer) handleCreatePeerConnection(w http.ResponseWriter, r *http.
 	}
 }
 
-func startHttpStream(closeCh chan<- struct{}) {
+func startHttpStream(closeCh chan<- struct{}, webrtcApi *webrtc.API) {
 	log.Println("Starting HTTP Server")
 
 	server := httpServer{
 		connections: proxyConnections{},
+		webrtc:      webrtcApi,
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir(".")))
@@ -69,15 +107,21 @@ func setupResponse(w *http.ResponseWriter, _ *http.Request) {
 func (hs *httpServer) handleConnectionsStatus(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	connectionsStatus := hs.connections.GetStatus()
+	_, _ = w.Write([]byte("Active streams:"))
 	for _, status := range connectionsStatus {
-		_, _ = w.Write([]byte(status))
 		_, _ = w.Write([]byte("\n"))
+		_, _ = w.Write([]byte(status))
 	}
-	_, _ = w.Write([]byte("Hello"))
 }
 
 func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescription) *webrtc.SessionDescription {
-	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{
+				URLs: []string{"stun:stun.l.google.com:19302"},
+			},
+		},
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -113,7 +157,6 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 
 	if strings.Index(source, "http") == 0 {
 		proxyConnection := hs.connections.NewConnection(peerConnection)
-
 		go startMpegTsProxy(peerConnection, videoTrack, audioTrack, source, proxyConnection)
 	} else if producer := rtmpCenter.find(source); producer != nil {
 		proxyConnection := hs.connections.NewConnection(peerConnection)
@@ -126,12 +169,6 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 }
 
 func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackLocalStaticSample, _ *webrtc.TrackLocalStaticSample, producer *RtmpProducer, proxyConnection *proxyConnection) {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Println("panic occurred:", err)
-		}
-	}()
-
 	consumer := WebRtcConsumer{
 		clientId:   proxyConnection.key,
 		isReady:    true,
@@ -140,7 +177,7 @@ func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackL
 	consumer.init()
 	producer.addConsumer(&consumer)
 
-	log.Printf("Start fetching frame from RTMP\n")
+	log.Printf("Start fetching frame from RTMP for %s\n", proxyConnection.key)
 
 	connection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		proxyConnection.ChangeState(state)
@@ -174,7 +211,7 @@ func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackL
 				}
 			}
 			_ = videoTrack.WriteSample(media.Sample{
-				Duration: time.Second,
+				Duration: time.Duration(frame.pts) * time.Millisecond,
 				Data:     frame.frame,
 			})
 		}
