@@ -3,12 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
 	"github.com/yapingcat/gomedia/go-codec"
 	"log"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -20,39 +18,6 @@ func main() {
 	go startRtmpServer(stopCh)
 	go startHttpStream(stopCh, nil)
 	<-stopCh
-}
-
-func getWebrtcApi() *webrtc.API {
-	// Listen on UDP Port 8443, will be used for all WebRTC traffic
-	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
-		IP:   net.IP{0, 0, 0, 0},
-		Port: 8443,
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Printf("Listening for WebRTC traffic at %s\n", udpListener.LocalAddr())
-
-	// Create a SettingEngine, this allows non-standard WebRTC behavior
-	settingEngine := webrtc.SettingEngine{}
-
-	// Configure our SettingEngine to use our UDPMux. By default a PeerConnection has
-	// no global state. The API+SettingEngine allows the user to share state between them.
-	// In this case we are sharing our listening port across many.
-	settingEngine.SetICEUDPMux(webrtc.NewICEUDPMux(nil, udpListener))
-
-	m := &webrtc.MediaEngine{}
-	if err := m.RegisterDefaultCodecs(); err != nil {
-		panic(err)
-	}
-
-	i := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(m, i); err != nil {
-		panic(err)
-	}
-
-	return webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine), webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(i))
 }
 
 type httpServer struct {
@@ -82,7 +47,7 @@ func (hs *httpServer) handleCreatePeerConnection(w http.ResponseWriter, r *http.
 }
 
 func startHttpStream(closeCh chan<- struct{}, webrtcApi *webrtc.API) {
-	log.Println("Starting HTTP Server")
+	log.Println("Starting HTTP server ...")
 
 	server := httpServer{
 		connections: proxyConnections{},
@@ -169,9 +134,14 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 }
 
 func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackLocalStaticSample, _ *webrtc.TrackLocalStaticSample, producer *RtmpProducer, proxyConnection *proxyConnection) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println("panic occurred:", err)
+		}
+	}()
+
 	consumer := WebRtcConsumer{
 		clientId:   proxyConnection.key,
-		isReady:    true,
 		videoTrack: videoTrack,
 	}
 	consumer.init()
@@ -182,8 +152,7 @@ func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackL
 	connection.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		proxyConnection.ChangeState(state)
 		if state == webrtc.PeerConnectionStateDisconnected {
-			consumer.isReady = false
-			close(consumer.frameCome)
+			consumer.close()
 			producer.removeConsumer(proxyConnection.key)
 			proxyConnection.Close()
 		}
@@ -191,30 +160,23 @@ func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackL
 
 	firstFrame := true
 	for {
-		_, running := <-consumer.frameCome
+		frame, running := <-consumer.frameChan
 		if !running {
 			return
 		}
-		consumer.mtx.Lock()
-		frames := consumer.framesList
-		consumer.framesList = nil
-		consumer.mtx.Unlock()
-		for _, frame := range frames {
-			if firstFrame { //wait for I frame
-				if frame.cid == codec.CODECID_VIDEO_H264 {
-					if !codec.IsH264IDRFrame(frame.frame) {
-						continue
-					}
-					firstFrame = false
-				} else {
+		if firstFrame { //wait for I frame
+			if frame.cid == codec.CODECID_VIDEO_H264 {
+				if !codec.IsH264IDRFrame(frame.frame) {
 					continue
 				}
+				firstFrame = false
+			} else {
+				continue
 			}
-			_ = videoTrack.WriteSample(media.Sample{
-				Duration: time.Duration(frame.pts) * time.Millisecond,
-				Data:     frame.frame,
-			})
 		}
+		_ = videoTrack.WriteSample(media.Sample{
+			Duration: time.Duration(frame.pts) * time.Millisecond,
+			Data:     frame.frame,
+		})
 	}
-
 }

@@ -4,19 +4,20 @@ import (
 	"github.com/pion/webrtc/v3"
 	"github.com/yapingcat/gomedia/go-codec"
 	"sync"
+	"sync/atomic"
 )
 
 type WebRtcConsumer struct {
 	clientId   string
-	isReady    bool
+	isReady    atomic.Bool
 	videoTrack *webrtc.TrackLocalStaticSample
 	mtx        sync.Mutex
-	framesList []*MediaFrame
-	frameCome  chan struct{}
+	frameChan  chan *MediaFrame
 }
 
 func (wc *WebRtcConsumer) init() {
-	wc.frameCome = make(chan struct{}, 1)
+	wc.frameChan = make(chan *MediaFrame, 100)
+	wc.isReady.Store(true)
 }
 
 func (wc *WebRtcConsumer) getId() string {
@@ -24,20 +25,19 @@ func (wc *WebRtcConsumer) getId() string {
 }
 
 func (wc *WebRtcConsumer) ready() bool {
-	return wc.isReady
+	return wc.isReady.Load()
 }
 
 func (wc *WebRtcConsumer) play(frame *MediaFrame) {
-	if wc.isReady {
+	if wc.isReady.Load() {
 		if frame.cid != codec.CODECID_VIDEO_H264 {
 			return
 		}
-		wc.mtx.Lock()
-		wc.framesList = append(wc.framesList, frame)
-		wc.mtx.Unlock()
-		select {
-		case wc.frameCome <- struct{}{}:
-		default:
-		}
+		wc.frameChan <- frame
 	}
+}
+
+func (wc *WebRtcConsumer) close() {
+	wc.isReady.Store(false)
+	close(wc.frameChan)
 }

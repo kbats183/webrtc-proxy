@@ -1,29 +1,31 @@
 <html>
 <head>
-    <title>Mpeg TS / Rtmp to WebRTC</title>
+    <title>WebRTC player</title>
+    <style>
+        body {
+            background-color: rgba(0, 0, 0, 0);
+            margin: 0 auto;
+            overflow: hidden;
+        }
+        #webrtcVideo {
+            width: 100%;
+        }
+        #webrtcAudio {
+            opacity: 0;
+        }
+    </style>
 </head>
-
 <body>
-<h1>Mpeg TS / Rtmp to WebRTC</h1>
-<p>
-    <label for="streamUrl">Stream Url</label>
-    <input id="streamUrl" type="text" value=""/>
-    <button id="streamOpenBtn">Open</button>
-</p>
-<p><a href="" id="connectionUrlLink"></a></p>
-<p>Offer url: <i id="connectionUrl"></i></p>
-
-<div style="max-width: 100%;">
-    <video id="webrtcVideo" width="100%" style="max-width: 800px;" autoplay controls=""></video>
-    <audio id="webrtcAudio" autoplay controls=""></audio>
-</div>
+<video id="webrtcVideo" width="100%" autoplay></video>
+<audio id="webrtcAudio" autoplay style="opacity: 0"></audio>
 </body>
 
 </html>
 <script>
+    const streamUrl = location.hash.length > 0 ? location.hash.slice(1) : "";
+
     let pc = undefined;
 
-    document.getElementById("streamOpenBtn").addEventListener("click", () => playStream());
     const webrtcVideo = document.getElementById("webrtcVideo");
     const webrtcAudio = document.getElementById("webrtcAudio");
 
@@ -31,8 +33,6 @@
         new URL(url, `${location.protocol}//${location.host}${location.pathname === '/' ? '' : location.pathname}`).href;
     const getConnectionUrl = (streamSource) =>
         getRelativeUrl("c?source=" + encodeURIComponent(streamSource));
-    const getPlayerUrl = (streamSource) =>
-        getRelativeUrl("player.html#" + encodeURIComponent(streamSource));
 
     function playStream() {
         pc?.close();
@@ -54,11 +54,6 @@
         pc.createOffer()
             .then(offer => {
                 pc.setLocalDescription(offer)
-                const streamUrl = document.getElementById("streamUrl").value;
-                document.getElementById("connectionUrl").innerText = getConnectionUrl(streamUrl);
-                document.getElementById("connectionUrlLink").innerText = getPlayerUrl(streamUrl);
-                document.getElementById("connectionUrlLink").href = getPlayerUrl(streamUrl);
-
                 return fetch(getConnectionUrl(streamUrl), {
                     method: "post",
                     headers: {
@@ -71,4 +66,6 @@
             .then(res => pc.setRemoteDescription(res))
             .catch((e) => console.error("Failed to fetch peer connection info", e));
     }
+
+    playStream();
 </script>

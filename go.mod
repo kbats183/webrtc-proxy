@@ -1,12 +1,12 @@
 module github.com/kbats183/webrtc-proxy
 
-go 1.18
+go 1.19
 
 require github.com/pion/webrtc/v3 v3.1.43
 
 require (
+	github.com/pion/interceptor v0.1.11
 	github.com/yapingcat/gomedia v0.0.0-20220826132733-e6cff422c664
-
 )
 
 require (
@@ -14,7 +14,6 @@ require (
 	github.com/pion/datachannel v1.5.2 // indirect
 	github.com/pion/dtls/v2 v2.1.5 // indirect
 	github.com/pion/ice/v2 v2.2.6 // indirect
-	github.com/pion/interceptor v0.1.11 // indirect
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/mdns v0.0.5 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
@@ -28,7 +27,6 @@ require (
 	github.com/pion/turn/v2 v2.0.8 // indirect
 	github.com/pion/udp v0.1.1 // indirect
 	golang.org/x/crypto v0.0.0-20220516162934-403b01795ae8 // indirect
-	golang.org/x/net v0.0.0-20220722155237-a158d28d115b // indirect
-	golang.org/x/sys v0.0.0-20220909162455-aba9fc2a8ff2 // indirect
-
+	golang.org/x/net v0.0.0-20220630215102-69896b714898 // indirect
+	golang.org/x/sys v0.0.0-20220622161953-175b2fd9d664 // indirect
 )
