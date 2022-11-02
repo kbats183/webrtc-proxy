@@ -142,7 +142,7 @@ func (sess *RtmpSession) sendToClient() {
 			sess.frameLists = nil
 			sess.mtx.Unlock()
 			for _, frame := range frames {
-				if frame.cid != codec.CODECID_VIDEO_H264 {
+				if frame.cid != codec.CODECID_VIDEO_H264 && frame.cid != codec.CODECID_AUDIO_AAC {
 					continue
 				}
 				if firstVideo { //wait for I frame
@@ -212,10 +212,9 @@ func (sess *RtmpSession) start() {
 
 func newRtmpProducer(name string, sess *RtmpSession) *RtmpProducer {
 	return &RtmpProducer{
-		name:      name,
-		session:   sess,
-		consumers: make([]MediaConsumer, 0, 10),
-		quit:      make(chan struct{}),
+		name:    name,
+		session: sess,
+		quit:    make(chan struct{}),
 	}
 }
 
@@ -240,8 +239,7 @@ func (f *MediaFrame) clone() *MediaFrame {
 type RtmpProducer struct {
 	name      string
 	session   *RtmpSession
-	mtx       sync.Mutex
-	consumers []MediaConsumer
+	consumers sync.Map // string -> MediaConsumer
 	quit      chan struct{}
 	die       sync.Once
 }
@@ -257,16 +255,14 @@ func (producer *RtmpProducer) dispatch() {
 			if frame == nil {
 				continue
 			}
-			producer.mtx.Lock()
-			tmp := make([]MediaConsumer, len(producer.consumers))
-			copy(tmp, producer.consumers)
-			producer.mtx.Unlock()
-			for _, c := range tmp {
-				if c.ready() {
+			producer.consumers.Range(func(_, value any) bool {
+				consumer := value.(MediaConsumer)
+				if consumer.ready() {
 					tmp := frame.clone()
-					c.play(tmp)
+					consumer.play(tmp)
 				}
-			}
+				return true
+			})
 		case <-producer.session.quit:
 			return
 		case <-producer.quit:
@@ -276,20 +272,11 @@ func (producer *RtmpProducer) dispatch() {
 }
 
 func (producer *RtmpProducer) addConsumer(consumer MediaConsumer) {
-	producer.mtx.Lock()
-	defer producer.mtx.Unlock()
-	producer.consumers = append(producer.consumers, consumer)
+	producer.consumers.Store(consumer.getId(), consumer)
 }
 
 func (producer *RtmpProducer) removeConsumer(id string) {
-	producer.mtx.Lock()
-	defer producer.mtx.Unlock()
-	for i, consumer := range producer.consumers {
-		if consumer.getId() == id {
-			producer.consumers = append(producer.consumers[i:], producer.consumers[i+1:]...)
-			return
-		}
-	}
+	producer.consumers.Delete(id)
 }
 
 func (producer *RtmpProducer) stop() {

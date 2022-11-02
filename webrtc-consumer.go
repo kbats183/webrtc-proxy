@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/pion/webrtc/v3"
 	"github.com/yapingcat/gomedia/go-codec"
-	"sync"
 	"sync/atomic"
 )
 
@@ -11,12 +10,11 @@ type WebRtcConsumer struct {
 	clientId   string
 	isReady    atomic.Bool
 	videoTrack *webrtc.TrackLocalStaticSample
-	mtx        sync.Mutex
 	frameChan  chan *MediaFrame
 }
 
 func (wc *WebRtcConsumer) init() {
-	wc.frameChan = make(chan *MediaFrame, 100)
+	wc.frameChan = make(chan *MediaFrame, 100000)
 	wc.isReady.Store(true)
 }
 
