@@ -4,16 +4,14 @@ go 1.19
 
 require github.com/pion/webrtc/v3 v3.1.43
 
-require (
-	github.com/pion/interceptor v0.1.11
-	github.com/yapingcat/gomedia v0.0.0-20220826132733-e6cff422c664
-)
+require github.com/yapingcat/gomedia v0.0.0-20221010121102-3c486eb4b9a0
 
 require (
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/pion/datachannel v1.5.2 // indirect
 	github.com/pion/dtls/v2 v2.1.5 // indirect
 	github.com/pion/ice/v2 v2.2.6 // indirect
+	github.com/pion/interceptor v0.1.11 // indirect
 	github.com/pion/logging v0.2.2 // indirect
 	github.com/pion/mdns v0.0.5 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
