@@ -11,13 +11,17 @@ import (
 )
 
 type RtmpCenter struct {
-	streams map[string]*RtmpProducer
+	streams map[string]RtmpProducer
+	mixer   RtmpMixerProducer
 	mtx     sync.Mutex
 }
 
-func (center *RtmpCenter) find(name string) *RtmpProducer {
+func (center *RtmpCenter) find(name string) RtmpProducer {
 	center.mtx.Lock()
 	defer center.mtx.Unlock()
+	if name == "_mixer_" {
+		return &center.mixer
+	}
 	if p, found := center.streams[name]; found {
 		return p
 	} else {
@@ -31,7 +35,7 @@ func (center *RtmpCenter) unRegister(name string) {
 	delete(center.streams, name)
 }
 
-func (center *RtmpCenter) register(name string, p *RtmpProducer) {
+func (center *RtmpCenter) register(name string, p RtmpProducer) {
 	center.mtx.Lock()
 	defer center.mtx.Unlock()
 	center.streams[name] = p
@@ -40,7 +44,8 @@ func (center *RtmpCenter) register(name string, p *RtmpProducer) {
 var rtmpCenter RtmpCenter
 
 func init() {
-	rtmpCenter = RtmpCenter{streams: make(map[string]*RtmpProducer)}
+	rtmpCenter = RtmpCenter{streams: make(map[string]RtmpProducer), mixer: RtmpMixerProducer{quit: make(chan struct{}), selectProducerCh: make(chan string, 1)}}
+	go rtmpCenter.mixer.dispatch()
 }
 
 func startRtmpServer(closeCh chan<- struct{}) {
@@ -69,7 +74,7 @@ type RtmpSession struct {
 	quit       chan struct{}
 	frameCome  chan struct{}
 	C          chan *MediaFrame
-	source     *RtmpProducer
+	source     RtmpProducer
 	frameLists []*MediaFrame
 	isReady    bool
 	die        sync.Once
@@ -108,7 +113,7 @@ func (sess *RtmpSession) init() {
 			source := rtmpCenter.find(name)
 			sess.source = source
 			if source != nil {
-				source.addConsumer(sess)
+				source.AddConsumer(sess)
 				sess.isReady = true
 				go sess.sendToClient()
 			} else {
@@ -125,7 +130,7 @@ func (sess *RtmpSession) init() {
 				sess.C <- f
 			})
 			name := sess.handle.GetStreamName()
-			p := newRtmpProducer(name, sess)
+			p := newRtmpStreamProducer(name, sess)
 			go p.dispatch()
 			rtmpCenter.register(name, p)
 		}
@@ -171,7 +176,7 @@ func (sess *RtmpSession) stop() {
 	sess.die.Do(func() {
 		close(sess.quit)
 		if sess.source != nil {
-			sess.source.removeConsumer(sess.id)
+			sess.source.RemoveConsumer(sess.id)
 			sess.source = nil
 		}
 		_ = sess.conn.Close()
@@ -210,8 +215,8 @@ func (sess *RtmpSession) start() {
 	}
 }
 
-func newRtmpProducer(name string, sess *RtmpSession) *RtmpProducer {
-	return &RtmpProducer{
+func newRtmpStreamProducer(name string, sess *RtmpSession) *RtmpStreamProducer {
+	return &RtmpStreamProducer{
 		name:    name,
 		session: sess,
 		quit:    make(chan struct{}),
@@ -236,7 +241,12 @@ func (f *MediaFrame) clone() *MediaFrame {
 	return tmp
 }
 
-type RtmpProducer struct {
+type RtmpProducer interface {
+	AddConsumer(sess MediaConsumer)
+	RemoveConsumer(id string)
+}
+
+type RtmpStreamProducer struct {
 	name      string
 	session   *RtmpSession
 	consumers sync.Map // string -> MediaConsumer
@@ -244,7 +254,73 @@ type RtmpProducer struct {
 	die       sync.Once
 }
 
-func (producer *RtmpProducer) dispatch() {
+const RtmpMixerStreamName = "_RTMP_MIXER_"
+
+type RtmpMixerProducer struct {
+	currentProducer  RtmpProducer
+	consumers        sync.Map // string -> MediaConsumer
+	selectProducerCh chan string
+	quit             chan struct{}
+	die              sync.Once
+}
+
+func (producer *RtmpMixerProducer) getId() string {
+	return RtmpMixerStreamName
+}
+
+func (producer *RtmpMixerProducer) ready() bool {
+	return true
+}
+
+func (producer *RtmpMixerProducer) play(frame *MediaFrame) {
+	producer.consumers.Range(func(_, value any) bool {
+		consumer := value.(MediaConsumer)
+		if consumer.ready() {
+			tmp := frame.clone()
+			consumer.play(tmp)
+		}
+		return true
+	})
+}
+
+func (producer *RtmpMixerProducer) AddConsumer(consumer MediaConsumer) {
+	producer.consumers.Store(consumer.getId(), consumer)
+}
+
+func (producer *RtmpMixerProducer) RemoveConsumer(id string) {
+	producer.consumers.Delete(id)
+}
+
+func (producer *RtmpMixerProducer) dispatch() {
+	defer func() {
+		log.Println("quit dispatch")
+		//producer.stop() todo: fix
+	}()
+	for {
+		select {
+		case newProducerName := <-producer.selectProducerCh:
+			newProducer := rtmpCenter.find(newProducerName)
+			if newProducer == nil {
+				log.Printf("Unknown RTMP producer `%s` selected in mixer", newProducerName)
+				continue
+			}
+			log.Printf("RTMP mixer stream %s select", newProducerName)
+			if producer.currentProducer != nil {
+				producer.currentProducer.RemoveConsumer(RtmpMixerStreamName)
+			}
+			producer.currentProducer = newProducer
+			newProducer.AddConsumer(producer)
+		case <-producer.quit:
+			return
+		}
+	}
+}
+
+func (producer *RtmpMixerProducer) SelectProducer(name string) {
+	producer.selectProducerCh <- name
+}
+
+func (producer *RtmpStreamProducer) dispatch() {
 	defer func() {
 		fmt.Println("quit dispatch")
 		producer.stop()
@@ -271,15 +347,15 @@ func (producer *RtmpProducer) dispatch() {
 	}
 }
 
-func (producer *RtmpProducer) addConsumer(consumer MediaConsumer) {
+func (producer *RtmpStreamProducer) AddConsumer(consumer MediaConsumer) {
 	producer.consumers.Store(consumer.getId(), consumer)
 }
 
-func (producer *RtmpProducer) removeConsumer(id string) {
+func (producer *RtmpStreamProducer) RemoveConsumer(id string) {
 	producer.consumers.Delete(id)
 }
 
-func (producer *RtmpProducer) stop() {
+func (producer *RtmpStreamProducer) stop() {
 	producer.die.Do(func() {
 		close(producer.quit)
 		rtmpCenter.unRegister(producer.name)

@@ -55,8 +55,9 @@ func startHttpStream(closeCh chan<- struct{}, webrtcApi *webrtc.API) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir(".")))
-	mux.HandleFunc("/c", server.handleCreatePeerConnection)
+	mux.HandleFunc("/c2", server.handleCreatePeerConnection)
 	mux.HandleFunc("/status", server.handleConnectionsStatus)
+	mux.HandleFunc("/mixer/select", server.handleRTMPMixerSelect)
 	err := http.ListenAndServe(":9080", mux)
 	close(closeCh)
 	log.Fatal(err)
@@ -133,7 +134,13 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 	return peerConnection.LocalDescription()
 }
 
-func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackLocalStaticSample, _ *webrtc.TrackLocalStaticSample, producer *RtmpProducer, proxyConnection *proxyConnection) {
+func (hs *httpServer) handleRTMPMixerSelect(w http.ResponseWriter, r *http.Request) {
+	stream := r.URL.Query().Get("stream")
+	rtmpCenter.mixer.SelectProducer(stream)
+	_, _ = w.Write([]byte("ok"))
+}
+
+func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackLocalStaticSample, _ *webrtc.TrackLocalStaticSample, producer RtmpProducer, proxyConnection *proxyConnection) {
 	defer func() {
 		if err := recover(); err != nil {
 			log.Println("panic occurred:", err)
@@ -145,7 +152,7 @@ func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackL
 		videoTrack: videoTrack,
 	}
 	consumer.init()
-	producer.addConsumer(&consumer)
+	producer.AddConsumer(&consumer)
 
 	log.Printf("Start fetching frame from RTMP for %s\n", proxyConnection.key)
 
@@ -153,7 +160,7 @@ func startRtmpProxy(connection *webrtc.PeerConnection, videoTrack *webrtc.TrackL
 		proxyConnection.ChangeState(state)
 		if state == webrtc.PeerConnectionStateDisconnected {
 			consumer.close()
-			producer.removeConsumer(proxyConnection.key)
+			producer.RemoveConsumer(proxyConnection.key)
 			proxyConnection.Close()
 		}
 	})
