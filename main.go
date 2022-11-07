@@ -55,7 +55,7 @@ func startHttpStream(closeCh chan<- struct{}, webrtcApi *webrtc.API) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir(".")))
-	mux.HandleFunc("/c2", server.handleCreatePeerConnection)
+	mux.HandleFunc("/c", server.handleCreatePeerConnection)
 	mux.HandleFunc("/status", server.handleConnectionsStatus)
 	mux.HandleFunc("/mixer/select", server.handleRTMPMixerSelect)
 	err := http.ListenAndServe(":9080", mux)
