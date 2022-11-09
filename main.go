@@ -63,9 +63,8 @@ func startHttpStream(closeCh chan<- struct{}, webrtcApi *webrtc.API) {
 	log.Fatal(err)
 }
 
-func setupResponse(w *http.ResponseWriter, _ *http.Request) {
-	(*w).Header().Set("Access-Control-Allow-Origin", "http://localhost:3000")
-	(*w).Header().Set("Access-Control-Allow-Origin", "http://localhost:8080")
+func setupResponse(w *http.ResponseWriter, r *http.Request) {
+	(*w).Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
 	(*w).Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 	(*w).Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 }
@@ -100,7 +99,7 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 		panic(err)
 	}
 
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypePCMA}, "audio", "pion")
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTyp}, "audio", "pion")
 	if err != nil {
 		panic(err)
 	}
@@ -122,10 +121,10 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 	<-gatherComplete
 
 	if strings.Index(source, "http") == 0 {
-		proxyConnection := hs.connections.NewConnection(peerConnection)
+		proxyConnection := hs.connections.NewConnection(peerConnection, source)
 		go startMpegTsProxy(peerConnection, videoTrack, audioTrack, source, proxyConnection)
 	} else if producer := rtmpCenter.find(source); producer != nil {
-		proxyConnection := hs.connections.NewConnection(peerConnection)
+		proxyConnection := hs.connections.NewConnection(peerConnection, "")
 		go startRtmpProxy(peerConnection, videoTrack, audioTrack, producer, proxyConnection)
 	} else {
 		log.Printf("Source %s not found", source)

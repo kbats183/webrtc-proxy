@@ -35,14 +35,14 @@ type proxyConnections struct {
 	mutex       sync.Mutex
 }
 
-func (t *proxyConnections) NewConnection(connection *webrtc.PeerConnection) *proxyConnection {
+func (t *proxyConnections) NewConnection(connection *webrtc.PeerConnection, source string) *proxyConnection {
 	key := randConnectionKey(10)
 	proxyConnection := proxyConnection{connection: connection, key: key, state: connection.ConnectionState()}
 	t.mutex.Lock()
 	t.connections = append(t.connections, proxyConnection)
 	t.mutex.Unlock()
 	proxyConnection.connections = t
-	log.Printf("New connection %s\n", key)
+	log.Printf("New connection %s (%s)\n", key, source)
 	return &proxyConnection
 }
 
