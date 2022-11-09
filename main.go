@@ -99,7 +99,7 @@ func (hs *httpServer) createProxyPeer(source string, offer webrtc.SessionDescrip
 		panic(err)
 	}
 
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTyp}, "audio", "pion")
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus}, "audio", "pion")
 	if err != nil {
 		panic(err)
 	}
